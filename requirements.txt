@@ -3,3 +3,4 @@ cdsapi
 pandas
 geopandas
 requests
+openeo
