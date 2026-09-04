@@ -1,64 +1,54 @@
 """
-Pull-and-inspect: Copernicus Global Flood Monitoring (GFM) — flood extent
-for Dadu district, event vs control window.
-
-Access route: openEO Platform — this is a VERIFIED, real code pattern,
-adapted directly from openEO's own official GFM documentation, which
-notably uses Pakistan's September 2022 floods as its own demo case:
-https://docs.openeo.cloud/usecases/gfm/
-
-SETUP (one-time):
-  pip install openeo
-  Free trial registration: https://docs.openeo.cloud/join/free_trial.html
-  First run will open a browser for OIDC login (authenticate_oidc()).
+Pull-and-inspect: Copernicus GFM via EODC's direct STAC API.
+Public endpoint: https://stac.eodc.eu/api/v1
 """
 
-import openeo
-from openeo.processes import mean
+import os
+import urllib.request
+from pathlib import Path
+from pystac_client import Client
 from config import BBOX, EVENT_START, EVENT_END, CONTROL_START, CONTROL_END
 
-conn = openeo.connect("openeo.cloud").authenticate_oidc()
+API_URL = "https://stac.eodc.eu/api/v1"
+COLLECTION_ID = "GFM"
+ASSET_NAMES = ["ensemble_flood_extent"]
 
-spatial_extent = {
-    "west": BBOX["min_lon"],
-    "east": BBOX["max_lon"],
-    "south": BBOX["min_lat"],
-    "north": BBOX["max_lat"],
-}
+catalog = Client.open(API_URL)
 
+# Bounding box: [minLon, minLat, maxLon, maxLat]
+aoi_bbox = [BBOX["min_lon"], BBOX["min_lat"], BBOX["max_lon"], BBOX["max_lat"]]
+
+base_dir = Path(__file__).resolve().parents[1]
 
 def pull_window(start_date, end_date, label):
-    gfm_data = conn.load_collection(
-        "GFM",
-        spatial_extent=spatial_extent,
-        temporal_extent=[start_date, end_date],
-        bands=["ensemble_flood_extent"],
+    time_range = f"{start_date}/{end_date}"
+
+    search = catalog.search(
+        max_items=1000,
+        collections=COLLECTION_ID,
+        bbox=aoi_bbox,
+        datetime=time_range,
     )
+    items = search.item_collection()
+    print(f"[{label}] Found {len(items)} GFM items for {time_range} over Dadu bbox")
 
-    # mean over time = flood FREQUENCY per pixel across the window
-    # (0 = never flooded in this window, 1 = flooded every observation)
-    flood_freq = gfm_data.reduce_dimension(dimension="t", reducer=mean)
+    download_root = base_dir / "data" / "raw" / "gfm" / label
+    for item in items:
+        download_path = download_root / item.id
+        download_path.mkdir(parents=True, exist_ok=True)
+        for asset_name in ASSET_NAMES:
+            if asset_name not in item.assets:
+                continue
+            asset = item.assets[asset_name]
+            fpath = download_path / os.path.basename(asset.href)
+            print(f"  downloading {fpath.name}...")
+            urllib.request.urlretrieve(asset.href, fpath)
 
-    result = flood_freq.save_result(
-        format="GTiff", options={"tile_grid": "wgs84-1degree"}
-    )
-    job = result.create_job(title=f"gfm_dadu_{label}")
-    job.start_and_wait()
-    job.get_results().download_files(f"../data/raw/gfm/{label}/")
-    print(f"[{label}] downloaded to ../data/raw/gfm/{label}/")
-
+    return len(items)
 
 if __name__ == "__main__":
-    print("Pulling GFM flood extent for EVENT window...")
-    pull_window(EVENT_START, EVENT_END, "event")
+    event_count = pull_window(EVENT_START, EVENT_END, "event")
+    control_count = pull_window(CONTROL_START, CONTROL_END, "control")
 
-    print("Pulling GFM flood extent for CONTROL window...")
-    pull_window(CONTROL_START, CONTROL_END, "control")
-
-    # SANITY CHECK (do this by hand after download, in QGIS or rasterio):
-    # open both GeoTIFFs — the "event" one should show meaningfully higher
-    # flood-frequency values over Dadu than the "control" one.
-    # If they look similar, that's your most important red flag — see
-    # Phase 3 of the phase plan.
-    print("\nNext: open both GeoTIFFs and compare flood-frequency values "
-          "over Dadu district. Event should be visibly higher than control.")
+    print(f"\nEvent window items: {event_count}")
+    print(f"Control window items: {control_count}")

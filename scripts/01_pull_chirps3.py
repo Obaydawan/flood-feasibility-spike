@@ -1,69 +1,50 @@
-"""
-Pull-and-inspect: CHIRPS v3 daily rainfall for Dadu district, event + control window.
-
-Access route: Google Earth Engine — verified public dataset:
-  UCSB-CHC/CHIRPS/V3/DAILY_RNL
-  https://developers.google.com/earth-engine/datasets/catalog/UCSB-CHC_CHIRPS_V3_DAILY_RNL
-
-Why GEE instead of raw file download: no manual file-format wrangling,
-free, and gives you a pandas-ready time series in a few lines. Good enough
-for a feasibility spike; the real FYP pipeline may switch to direct file
-ingestion from https://www.chc.ucsb.edu/data/chirps3 for full reproducibility.
-
-SETUP (one-time, do this first):
-  pip install earthengine-api pandas
-  earthengine authenticate      # opens a browser, needs a free GEE account
-                                 # (sign up at https://earthengine.google.com)
-"""
-
 import ee
 import pandas as pd
+from pathlib import Path
 from config import BBOX, EVENT_START, EVENT_END, CONTROL_START, CONTROL_END
 
-ee.Initialize()  # uses your authenticated GEE credentials
+ee.Initialize()
 
-REGION = ee.Geometry.Rectangle(
-    [BBOX["min_lon"], BBOX["min_lat"], BBOX["max_lon"], BBOX["max_lat"]]
-)
+dadu_geom = ee.Geometry.Rectangle([
+    BBOX["min_lon"], BBOX["min_lat"],
+    BBOX["max_lon"], BBOX["max_lat"]
+])
 
-
-def pull_window(start_date, end_date, label):
-    collection = (
-        ee.ImageCollection("UCSB-CHC/CHIRPS/V3/DAILY_RNL")
-        .filterDate(start_date, end_date)
-        .filterBounds(REGION)
+def extract_chirps(start, end, label):
+    col = (
+        ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+        .filterDate(start, end)
+        .filterBounds(dadu_geom)
+        .select("precipitation")
     )
+    
+    def extract_mean(img):
+        mean_val = img.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=dadu_geom,
+            scale=5566,
+            maxPixels=1e9
+        ).get("precipitation")
+        return ee.Feature(None, {
+            "date": img.date().format("YYYY-MM-dd"),
+            "precip_mm": mean_val,
+            "window": label
+        })
 
-    def daily_mean(image):
-        stats = image.reduceRegion(
-            reducer=ee.Reducer.mean(), geometry=REGION, scale=5000
-        )
-        return image.set("date", image.date().format("YYYY-MM-dd")).set(
-            "precip_mm", stats.get("precipitation")
-        )
+    features = col.map(extract_mean).getInfo()["features"]
+    return [f["properties"] for f in features]
 
-    features = collection.map(daily_mean)
-    data = features.aggregate_array("date").getInfo()
-    values = features.aggregate_array("precip_mm").getInfo()
+event_data = extract_chirps(EVENT_START, EVENT_END, "event")
+control_data = extract_chirps(CONTROL_START, CONTROL_END, "control")
 
-    df = pd.DataFrame({"date": data, "precip_mm": values})
-    df["window"] = label
-    return df
+result = pd.DataFrame(event_data + control_data)
+print(result)
+print(f"\nRows: {len(result)}")
+print(f"Event window mean precip_mm: {result[result['window']=='event']['precip_mm'].mean():.2f}")
+print(f"Control window mean precip_mm: {result[result['window']=='control']['precip_mm'].mean():.2f}")
 
-
-if __name__ == "__main__":
-    event_df = pull_window(EVENT_START, EVENT_END, "event")
-    control_df = pull_window(CONTROL_START, CONTROL_END, "control")
-    result = pd.concat([event_df, control_df], ignore_index=True)
-
-    print(result.to_string(index=False))
-    print(f"\nRows: {len(result)}")
-    print(f"Event window mean precip_mm: {event_df['precip_mm'].mean():.2f}")
-    print(f"Control window mean precip_mm: {control_df['precip_mm'].mean():.2f}")
-
-    result.to_csv("../data/raw/chirps3/dadu_sample.csv", index=False)
-    print("\nSaved to ../data/raw/chirps3/dadu_sample.csv")
-
-    # SANITY CHECK to look for yourself, not just trust:
-    # event window mean should be meaningfully HIGHER than control window
-    # mean, given Dadu's confirmed flood exposure in Aug-Sep 2022.
+out_dir = Path(__file__).resolve().parents[1] / "data" / "raw" / "chirps3"
+out_dir.mkdir(parents=True, exist_ok=True)
+csv_path = out_dir / "dadu_sample.csv"
+result.to_csv(csv_path, index=False)
+print(f"\nSaved successfully to {csv_path}")
