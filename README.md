@@ -1,4 +1,4 @@
-# flood-feasibility-spike
+# flood-feasibility-spik
 
 A small, vertical-slice prototype proving the core data pipeline for **IndusGuard** — a 48-hour district-level flood risk forecasting system for Pakistan — works end to end, before committing to the full FYP build.
 
