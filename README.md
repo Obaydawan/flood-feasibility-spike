@@ -6,7 +6,7 @@ A small, vertical-slice prototype proving the core data pipeline for **IndusGuar
 
 ---
 
-## What this is
+## What this is:
 
 Rather than building the full multi-district, multi-year IndusGuard pipeline blind, this repo shrinks it down to its smallest working version: **one district, one known flood event, all 4 real data sources** — walked end to end from raw ingestion through spatial alignment to a joined feature table. If this works at tiny scale, the full system is an engineering scaling problem, not an open research question.
 
